@@ -32,15 +32,15 @@ options, args = parser.parse_args()
 # Load settings from the default configuration file
 try:
 	config = json.load(open('default_config.json'))
-except ValueError, e:
-	sys.exit('Failed to parse default_config.json with error: %s' % e)
+except ValueError, error:
+	sys.exit('Failed to parse default_config.json with error: %s' % error)
 # Update settings from the local configuration file
 if options.local_config:
 	try:
 		config.update(json.load(open(options.local_config)))
-	except ValueError, e:
+	except ValueError, error:
 		sys.exit('Failed to parse JSON data in %s with error: %s' % (
-			options.local_config, e),
+			options.local_config, error),
 		)
 
 
@@ -54,27 +54,40 @@ class LastUpdateStore(object):
 		self.filename = filename
 	
 	def __enter__(self):
-		# When entering a "with" construct, open file and obtain lock.
-		# Note that the type of lock provided by fcntl is non-enforsible,
-		# i.e. it has no effect if the other process doesn't check for it.
+		"""
+		This method is called when entering a "with" construct. It opens the
+		store file for writing, creating it if necessary, and obtains an 
+		exclusive lock on the file.
+		
+		Note that the type of lock provided by "fnctl" is non-enforsible, i.e.
+		unless a process checks for its existence, and voluntarily obeys it, it
+		will be able to write to the file. However, the main purpose of the lock
+		is to prevent conflicts with other instances of pydbpintegrator, which
+		will play nice.
+		"""
 		mode = 'r+' if os.path.exists(self.filename) else 'w'
 		self.file = open(self.filename, mode)
 		try:
 			fcntl.flock(self.file, fcntl.LOCK_EX | fcntl.LOCK_NB)
 		except IOError, e:
-			sys.exit('Unable to obtain lock on %s' % self.filename)
+			sys.exit('Unable to obtain lock on %s, probably due to other ' 
+				'running instances of pydbpintegrator.' % self.filename)
 		return self
 	
 	def __exit__(self, *args, **kwargs):
-		# When leaving a "with" construct, release lock and close file
+		"""
+		Called when leaving a "with" construct, releases lock and closes file.
+		"""
 		fcntl.flock(self.file, fcntl.LOCK_UN)
 		self.file.__exit__(*args, **kwargs)
 	
 	def read(self):
+		"""Returns the contents of the file."""
 		self.file.seek(0)
 		return self.file.read().strip()
 	
 	def write(self, value):
+		"""Replaces contents of the file with provided value."""
 		self.file.seek(0)
 		self.file.truncate()
 		self.file.write(unicode(value))
