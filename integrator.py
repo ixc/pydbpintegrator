@@ -44,7 +44,7 @@ if options.local_config:
 		)
 
 
-class LastUpdate(object):
+class LastUpdateStore(object):
 	"""
 	This class is intended to be used only in conjunction with a "with"
 	statement.
@@ -52,7 +52,6 @@ class LastUpdate(object):
 	
 	def __init__(self, filename):
 		self.filename = filename
-		self.values = []
 	
 	def __enter__(self):
 		# When entering a "with" construct, open file and obtain lock.
@@ -70,8 +69,35 @@ class LastUpdate(object):
 		fcntl.flock(self.file, fcntl.LOCK_UN)
 		self.file.__exit__(*args, **kwargs)
 	
-	def __cmp__(self, other):
-		return cmp(unicode(self), other)
+	def read(self):
+		self.file.seek(0)
+		return self.file.read().strip()
+	
+	def write(self, value):
+		self.file.seek(0)
+		self.file.truncate()
+		self.file.write(unicode(value))
+		self.file.flush()
+
+
+class UpdateDate(object):
+	
+	def __init__(self, value=None):
+		self.values = []
+		if value is not None:
+			self.set_value(value)
+	
+	def for_comparison(self):
+		"""
+		The lastPublishedFile.txt supplied by the server is actually always one
+		larger than the actual last published file, so in comparison contexts
+		we'll compare against an incremented version of self, unless it's not a
+		fully formed date.
+		"""
+		if len(self.values) < 5:
+			return unicode(self)
+		else:
+			return u'-'.join(self._string_values(increment=1))
 	
 	def __unicode__(self):
 		"""
@@ -79,9 +105,9 @@ class LastUpdate(object):
 		the format used in lastPublishedFile.txt on the DBPedia Live server.
 		Incomplete dates will not be returned as fully formed.
 		"""
-		return '-'.join(self._string_values())
+		return u'-'.join(self._string_values())
 	
-	def _string_values(self, limit=5):
+	def _string_values(self, limit=5, increment=0):
 		"""
 		Generate the values as strings with appropriate zero-padding, suitable 
 		for constructing URLs or paths with.
@@ -94,7 +120,7 @@ class LastUpdate(object):
 			if 0 < i < 4:
 				yield str(value).zfill(2)
 			if i == 4:
-				yield str(value).zfill(6)
+				yield str(value + increment).zfill(6)
 	
 	def set_value(self, value):
 		"""
@@ -142,16 +168,6 @@ class LastUpdate(object):
 	
 	def path(self):
 		return os.path.join(*self._string_values(limit=4))
-	
-	def read(self):
-		self.file.seek(0)
-		self.set_value(self.file.read().strip())
-	
-	def write(self):
-		self.file.seek(0)
-		self.file.truncate()
-		self.file.write(unicode(self))
-		self.file.flush()
 
 
 def urlretrieve(url, directory):
@@ -186,18 +202,15 @@ def urlretrieve(url, directory):
 		time.sleep(RETRY_WAIT)
 	
 
-with LastUpdate(config['last_updated_store']) as last_updated:
+with LastUpdateStore(config['last_updated_store']) as last_update_store:
 	# If the script was called to update the last updated value, update the
 	# store and quit
 	if options.last_updated:
-		last_updated.set_value(options.last_updated)
-		last_updated.write()
+		last_update_store.write(UpdateDate(options.last_updated))
 		# TODO: Validation
 		print 'Last updated date updated.'
 		sys.exit()
-	else:
-		last_updated.read()
-	
+
 	if not config['temp_directory']:
 		temp_directory = tempfile.mkdtemp(prefix='pydbp')
 	else:
@@ -206,10 +219,11 @@ with LastUpdate(config['last_updated_store']) as last_updated:
 			os.makedirs(temp_directory)
 		assert os.access(temp_directory, os.W_OK), \
 			'Can\'t write to temp directory %s' % temp_directory
-	
+
+	last_updated = UpdateDate(last_update_store.read())	
 	last_published = None # Nothing is smaller than None
 	while True:
-		if last_updated < last_published:
+		if last_updated.for_comparison() < last_published:
 			# Incrementing also guarantees that we now have a fully formed
 			# update date
 			last_updated.increment()
@@ -230,9 +244,9 @@ with LastUpdate(config['last_updated_store']) as last_updated:
 			if added_file is None and removed_file is None:
 				last_updated.finish_hour()
 				# Sanity check
-				assert last_updated < last_published, \
+				assert last_updated.for_comparison() < last_published, \
 					'Invalid last published date provided by server.'
-				last_updated.write()
+				last_update_store.write(last_updated)
 				continue
 			
 			if added_file:
@@ -241,7 +255,7 @@ with LastUpdate(config['last_updated_store']) as last_updated:
 			if removed_file:
 				# Unzip and load removed file
 				print 'Unzipping and loading %s' % removed_file
-			last_updated.write()
+			last_update_store.write(last_updated)
 		else:
 			# If this isn't the first run through the loop, wait before checking
 			# the server for updates
