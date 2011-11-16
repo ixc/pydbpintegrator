@@ -1,0 +1,7 @@
+{
+	"last_updated_store": "last_updated.store",
+	"isql_command": "isql",
+	"live_server": "http://live.dbpedia.org/liveupdates",
+	"temp_directory": "",
+	"clear_temp_files": true
+}
