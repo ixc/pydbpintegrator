@@ -19,7 +19,7 @@ RETRY_WAIT = 5
 
 # Set up the command-line parameters
 parser = optparse.OptionParser()
-parser.add_option('-d', '--last-updated', dest='last_updated',
+parser.add_option('-u', '--last-updated', dest='last_updated',
 	help='Set the last update date of the DBPedia instance in '
 	'YYYY-MM-DD-HH-IIIIII format and quit (at least YYYY-MM required).',
 )
