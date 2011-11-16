@@ -57,7 +57,8 @@ class LastUpdateStore(object):
 		# When entering a "with" construct, open file and obtain lock.
 		# Note that the type of lock provided by fcntl is non-enforsible,
 		# i.e. it has no effect if the other process doesn't check for it.
-		self.file = open(self.filename, 'r+')
+		mode = 'r+' if os.path.exists(self.filename) else 'w'
+		self.file = open(self.filename, mode)
 		try:
 			fcntl.flock(self.file, fcntl.LOCK_EX | fcntl.LOCK_NB)
 		except IOError, e:
