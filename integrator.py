@@ -5,6 +5,7 @@ import fcntl # Only avilablle on POSIX systems
 import json # Only available in Python 2.6+
 import optparse
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -42,6 +43,10 @@ if options.local_config:
 		sys.exit('Failed to parse JSON data in %s with error: %s' % (
 			options.local_config, error),
 		)
+	except IOError, error:
+		sys.exit('Failed to open config file % with error: %s' % (
+			options.local_config, error),
+		)
 
 
 class LastUpdateStore(object):
@@ -52,6 +57,7 @@ class LastUpdateStore(object):
 	
 	def __init__(self, filename):
 		self.filename = filename
+		self.exit_functions = []
 	
 	def __enter__(self):
 		"""
@@ -76,10 +82,20 @@ class LastUpdateStore(object):
 	
 	def __exit__(self, *args, **kwargs):
 		"""
-		Called when leaving a "with" construct, releases lock and closes file.
+		Called when leaving a "with" construct, releases lock, closes file and
+		runs any queued on_exit functions.
 		"""
 		fcntl.flock(self.file, fcntl.LOCK_UN)
-		self.file.__exit__(*args, **kwargs)
+		self.file.close()
+		for function in self.exit_functions:
+			function()
+	
+	def on_exit(self, function):
+		"""
+		Registeres a provided function in a (FIFO) queue, to be executed when
+		leaving the "with" construct.
+		"""
+		self.exit_functions += [function]
 	
 	def read(self):
 		"""Returns the contents of the file."""
@@ -224,7 +240,8 @@ with LastUpdateStore(config['last_updated_store']) as last_update_store:
 		# TODO: Validation
 		print 'Last updated date updated.'
 		sys.exit()
-
+	
+	# Create a temporary directory for the downloaded files
 	if not config['temp_directory']:
 		temp_directory = tempfile.mkdtemp(prefix='pydbp')
 	else:
@@ -233,7 +250,9 @@ with LastUpdateStore(config['last_updated_store']) as last_update_store:
 			os.makedirs(temp_directory)
 		assert os.access(temp_directory, os.W_OK), \
 			'Can\'t write to temp directory %s' % temp_directory
-
+	if config['clear_temp_files']:
+		last_update_store.on_exit(lambda: oshutil.rmtree(temp_directory))
+	
 	last_updated = UpdateDate(last_update_store.read())	
 	last_published = None # Nothing is smaller than None
 	while True:
