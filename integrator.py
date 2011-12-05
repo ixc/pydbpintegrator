@@ -41,12 +41,12 @@ if options.local_config:
 		config.update(json.load(open(options.local_config)))
 	except ValueError, error:
 		sys.exit('Failed to parse JSON data in %s with error: %s' % (
-			options.local_config, error),
-		)
+			options.local_config, error
+		))
 	except IOError, error:
 		sys.exit('Failed to open config file % with error: %s' % (
-			options.local_config, error),
-		)
+			options.local_config, error
+		))
 
 
 class LastUpdateStore(object):
@@ -251,7 +251,7 @@ with LastUpdateStore(config['last_updated_store']) as last_update_store:
 		assert os.access(temp_directory, os.W_OK), \
 			'Can\'t write to temp directory %s' % temp_directory
 	if config['clear_temp_files']:
-		last_update_store.on_exit(lambda: oshutil.rmtree(temp_directory))
+		last_update_store.on_exit(lambda: shutil.rmtree(temp_directory))
 	
 	last_updated = UpdateDate(last_update_store.read())	
 	last_published = None # Nothing is smaller than None
@@ -281,7 +281,7 @@ with LastUpdateStore(config['last_updated_store']) as last_update_store:
 					'Invalid last published date provided by server.'
 				last_update_store.write(last_updated)
 				continue
-			
+			# TODO: wrap in a try that catches KeyboardInterrupt
 			if added_file:
 				# Unzip and load added file
 				print 'Unzipping and loading %s' % added_file
