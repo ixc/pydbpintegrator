@@ -3,5 +3,9 @@
 	"isql_command": "isql",
 	"live_server": "http://live.dbpedia.org/liveupdates",
 	"temp_directory": "",
-	"clear_temp_files": true
+	"clear_temp_files": true,
+	"sparql_endpoint": "http://localhost:8890/sparql-auth",
+	"sparql_default_graph": "http://dbpedia.org",
+	"sparql_username": "dba",
+	"sparql_password": "dba"
 }

@@ -2,6 +2,7 @@
 
 import datetime
 import fcntl # Only avilablle on POSIX systems
+import gzip
 import json # Only available in Python 2.6+
 import optparse
 import os
@@ -9,6 +10,7 @@ import shutil
 import sys
 import tempfile
 import time
+import urllib
 import urllib2
 
 
@@ -230,7 +232,49 @@ def urlretrieve(url, directory):
 			print 'Failed to fetch %s, retrying...' % url
 			# TODO: count and log failures
 		time.sleep(RETRY_WAIT)
+
+
+class SPARQL(object):
+	def __init__(self, endpoint, graph=None, username=None, password=None):
+		self.endpoint = endpoint
+		self.graph = graph
+		if username or password:
+			password_manager = urllib2.HTTPPasswordMgrWithDefaultRealm()
+			password_manager.add_password(None, endpoint, username, password)
+			handler = urllib2.HTTPBasicAuthHandler(password_manager)
+			self.opener = urllib2.build_opener(handler)
+		else:
+			self.opener = urllib2.build_opener()
+		self.opener.addheaders.append((
+			'Accept',
+			'application/sparql-results+json,text/javascript,application/json',
+		))
+		
 	
+	def query(self, query):
+		data = urllib.urlencode({
+			'query': query,
+			'default-graph-uri': self.graph,
+			'format': 'JSON',
+		})
+		try:
+			self.opener.open(self.endpoint, data)
+		except urllib2.HTTPError, e:
+			# e.g. Virtuoso 22007 Error DT006:
+			# Cannot convert 2007-02-31 to datetime
+			# TODO: log these
+			pass
+	
+	def insert(self, triple):
+		if triple:
+			return self.query('INSERT { %s }' % triple)
+	
+	def delete(self, triple):
+		if triple:
+			return self.query('DELETE { %s } WHERE { %s }' % (
+				triple, triple
+			))
+
 
 with LastUpdateStore(config['last_updated_store']) as last_update_store:
 	# If the script was called to update the last updated value, update the
@@ -252,6 +296,14 @@ with LastUpdateStore(config['last_updated_store']) as last_update_store:
 			'Can\'t write to temp directory %s' % temp_directory
 	if config['clear_temp_files']:
 		last_update_store.on_exit(lambda: shutil.rmtree(temp_directory))
+	
+	# Set up the SPARQL "connection"
+	sparql = SPARQL(
+		config['sparql_endpoint'],
+		config['sparql_default_graph'],
+		config['sparql_username'],
+		config['sparql_password'],
+	)
 	
 	last_updated = UpdateDate(last_update_store.read())	
 	last_published = None # Nothing is smaller than None
@@ -285,9 +337,13 @@ with LastUpdateStore(config['last_updated_store']) as last_update_store:
 			if added_file:
 				# Unzip and load added file
 				print 'Unzipping and loading %s' % added_file
+				for triple in gzip.open(added_file):
+					sparql.insert(triple)
 			if removed_file:
 				# Unzip and load removed file
 				print 'Unzipping and loading %s' % removed_file
+				for triple in gzip.open(removed_file):
+					sparql.delete(triple)
 			last_update_store.write(last_updated)
 		else:
 			# If this isn't the first run through the loop, wait before checking
