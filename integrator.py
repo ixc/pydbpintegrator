@@ -100,12 +100,12 @@ class LastUpdateStore(object):
 		self.exit_functions += [function]
 	
 	def read(self):
-		"""Returns the contents of the file."""
+		"""Returns the entire contents of the file."""
 		self.file.seek(0)
 		return self.file.read().strip()
 	
 	def write(self, value):
-		"""Replaces contents of the file with provided value."""
+		"""Replaces entire contents of the file with provided value."""
 		self.file.seek(0)
 		self.file.truncate()
 		self.file.write(unicode(value))
@@ -118,18 +118,6 @@ class UpdateDate(object):
 		self.values = []
 		if value is not None:
 			self.set_value(value)
-	
-	def for_comparison(self):
-		"""
-		The lastPublishedFile.txt supplied by the server is actually always one
-		larger than the actual last published file, so in comparison contexts
-		we'll compare against an incremented version of self, unless it's not a
-		fully formed date.
-		"""
-		if len(self.values) < 5:
-			return unicode(self)
-		else:
-			return u'-'.join(self._string_values(increment=1))
 	
 	def __unicode__(self):
 		"""
@@ -153,6 +141,18 @@ class UpdateDate(object):
 				yield str(value).zfill(2)
 			if i == 4:
 				yield str(value + increment).zfill(6)
+	
+	def for_comparison(self):
+		"""
+		The lastPublishedFile.txt supplied by the server is actually always one
+		larger than the actual last published file, so in comparison contexts
+		we'll compare against an incremented version of self, unless it's not a
+		fully formed date.
+		"""
+		if len(self.values) < 5:
+			return unicode(self)
+		else:
+			return u'-'.join(self._string_values(increment=1))
 	
 	def set_value(self, value):
 		"""
@@ -199,6 +199,9 @@ class UpdateDate(object):
 		return '/'.join(self._string_values())
 	
 	def path(self):
+		"""
+		Returns the directory path in which files for this date would be stored.
+		"""
 		return os.path.join(*self._string_values(limit=4))
 
 
@@ -258,7 +261,9 @@ class SPARQL(object):
 			'format': 'JSON',
 		})
 		try:
-			self.opener.open(self.endpoint, data)
+			request = self.opener.open(self.endpoint, data)
+			response = json.loads(request.read())
+			print response['results']['bindings'][0]['callret-0']['value']
 		except urllib2.HTTPError, e:
 			# e.g. Virtuoso 22007 Error DT006:
 			# Cannot convert 2007-02-31 to datetime
@@ -275,83 +280,86 @@ class SPARQL(object):
 				triple, triple
 			))
 
+# Set up the SPARQL "connection".
+# This is outside the run function so it can be imported by other modules.
+sparql = SPARQL(
+	config['sparql_endpoint'],
+	config['sparql_default_graph'],
+	config['sparql_username'],
+	config['sparql_password'],
+)
 
-with LastUpdateStore(config['last_updated_store']) as last_update_store:
-	# If the script was called to update the last updated value, update the
-	# store and quit
-	if options.last_updated:
-		last_update_store.write(UpdateDate(options.last_updated))
-		# TODO: Validation
-		print 'Last updated date updated.'
-		sys.exit()
-	
-	# Create a temporary directory for the downloaded files
-	if not config['temp_directory']:
-		temp_directory = tempfile.mkdtemp(prefix='pydbp')
-	else:
-		temp_directory = config['temp_directory']
-		if not os.path.exists(temp_directory):
-			os.makedirs(temp_directory)
-		assert os.access(temp_directory, os.W_OK), \
-			'Can\'t write to temp directory %s' % temp_directory
-	if config['clear_temp_files']:
-		last_update_store.on_exit(lambda: shutil.rmtree(temp_directory))
-	
-	# Set up the SPARQL "connection"
-	sparql = SPARQL(
-		config['sparql_endpoint'],
-		config['sparql_default_graph'],
-		config['sparql_username'],
-		config['sparql_password'],
-	)
-	
-	last_updated = UpdateDate(last_update_store.read())	
-	last_published = None # Nothing is smaller than None
-	while True:
-		if last_updated.for_comparison() < last_published:
-			# Incrementing also guarantees that we now have a fully formed
-			# update date
-			last_updated.increment()
-			added_url = '%s/%s.added.nt.gz' % (
-				config['live_server'].rstrip('/'), last_updated.url())
-			removed_url = '%s/%s.removed.nt.gz' % (
-				config['live_server'].rstrip('/'), last_updated.url())
-			# Construct the directory to download the files into, creating it 
-			# if necessary
-			dl_directory = os.path.join(temp_directory, last_updated.path())
-			if not os.path.exists(dl_directory):
-				os.makedirs(dl_directory)
-			# Download the files
-			added_file = urlretrieve(added_url, dl_directory)
-			removed_file = urlretrieve(removed_url, dl_directory)
-			# If neither the added nor the removed file were on the server, we
-			# assume that we've reached the end of files for the hour
-			if added_file is None and removed_file is None:
-				last_updated.finish_hour()
-				# Sanity check
-				assert last_updated.for_comparison() < last_published, \
-					'Invalid last published date provided by server.'
-				last_update_store.write(last_updated)
-				continue
-			# TODO: wrap in a try that catches KeyboardInterrupt
-			if added_file:
-				# Unzip and load added file
-				print 'Unzipping and loading %s' % added_file
-				for triple in gzip.open(added_file):
-					sparql.insert(triple)
-			if removed_file:
-				# Unzip and load removed file
-				print 'Unzipping and loading %s' % removed_file
-				for triple in gzip.open(removed_file):
-					sparql.delete(triple)
-			last_update_store.write(last_updated)
+def run():
+	with LastUpdateStore(config['last_updated_store']) as last_update_store:
+		# If the script was called to update the last updated value, update the
+		# store and quit
+		if options.last_updated:
+			last_update_store.write(UpdateDate(options.last_updated))
+			# TODO: Validation
+			print 'Last updated date updated.'
+			sys.exit()
+		
+		# Create a temporary directory for the downloaded files
+		if not config['temp_directory']:
+			temp_directory = tempfile.mkdtemp(prefix='pydbp')
 		else:
-			# If this isn't the first run through the loop, wait before checking
-			# the server for updates
-			if last_published is not None:
-				time.sleep(RETRY_WAIT)
-			# Get the last updated date from the server
-			last_published = urllib2.urlopen(
-				'%s/lastPublishedFile.txt' % config['live_server'].rstrip('/')
-			).read().strip()
+			temp_directory = config['temp_directory']
+			if not os.path.exists(temp_directory):
+				os.makedirs(temp_directory)
+			assert os.access(temp_directory, os.W_OK), \
+				'Can\'t write to temp directory %s' % temp_directory
+		if config['clear_temp_files']:
+			last_update_store.on_exit(lambda: shutil.rmtree(temp_directory))
+		
+		last_updated = UpdateDate(last_update_store.read())	
+		last_published = None # Nothing is smaller than None
+		while True:
+			if last_updated.for_comparison() < last_published:
+				# Incrementing also guarantees that we now have a fully formed
+				# update date
+				last_updated.increment()
+				added_url = '%s/%s.added.nt.gz' % (
+					config['live_server'].rstrip('/'), last_updated.url())
+				removed_url = '%s/%s.removed.nt.gz' % (
+					config['live_server'].rstrip('/'), last_updated.url())
+				# Construct the directory to download the files into, creating
+				# it if necessary
+				dl_directory = os.path.join(temp_directory, last_updated.path())
+				if not os.path.exists(dl_directory):
+					os.makedirs(dl_directory)
+				# Download the files
+				added_file = urlretrieve(added_url, dl_directory)
+				removed_file = urlretrieve(removed_url, dl_directory)
+				# If neither the added nor the removed file were on the server,
+				# we assume that we've reached the end of files for the hour
+				if added_file is None and removed_file is None:
+					last_updated.finish_hour()
+					# Sanity check
+					assert last_updated.for_comparison() < last_published, \
+						'Invalid last published date provided by server.'
+					last_update_store.write(last_updated)
+					continue
+				# TODO: wrap in a try that catches KeyboardInterrupt
+				if added_file:
+					# Unzip and load added file
+					print 'Unzipping and loading %s' % added_file
+					for triple in gzip.open(added_file):
+						sparql.insert(triple)
+				if removed_file:
+					# Unzip and load removed file
+					print 'Unzipping and loading %s' % removed_file
+					for triple in gzip.open(removed_file):
+						sparql.delete(triple)
+				last_update_store.write(last_updated)
+			else:
+				# If this isn't the first run through the loop, wait before
+				# checking the server for updates
+				if last_published is not None:
+					time.sleep(RETRY_WAIT)
+				# Get the last updated date from the server
+				last_published = urllib2.urlopen(
+					'%s/lastPublishedFile.txt' % config['live_server'].rstrip('/')
+				).read().strip()
 
+if __name__ == '__main__':
+	run()
