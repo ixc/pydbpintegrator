@@ -6,6 +6,7 @@ import gzip
 import json # Only available in Python 2.6+
 import optparse
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -18,6 +19,8 @@ import urllib2
 CHUNK_SIZE = 4096
 # How many seconds to wait before trying to fetch data again
 RETRY_WAIT = 5
+# How many lines to load into Virtuoso in a single request
+QUERY_SIZE = 2**10 #2**20 # 1MB
 
 
 # Set up the command-line parameters
@@ -49,6 +52,8 @@ if options.local_config:
 		sys.exit('Failed to open config file % with error: %s' % (
 			options.local_config, error
 		))
+
+ping_pattern = re.compile(config.get('ping_pattern', '.*'))
 
 
 class LastUpdateStore(object):
@@ -237,7 +242,45 @@ def urlretrieve(url, directory):
 		time.sleep(RETRY_WAIT)
 
 
+def uncompress_and_load(filename, function, query_size=4096):
+	"""
+	Uncompresses provided file using gzip, then passes the contents to provided 
+	function, using chunks of approximately query_size, broken along newlines.
+	"""
+	line_count = 0
+	triple_count = 0
+	uncompressed = gzip.open(filename)
+	while True:
+		# TODO: Handle IOErrors that can be thrown by this (due to failed CRC)
+		queries = uncompressed.readlines(query_size)
+		if not queries:
+			break
+		line_count += len(queries)
+		triple_count += function(''.join(queries))
+		
+		if config.get('ping_url', None):
+			data = {
+				# Use only triples that match the regex and drop duplicates
+				'triples': list(set(filter(ping_pattern.match, queries))),
+				# HACK!
+				'action': 'add' if 'added' in filename else 'remove',
+				'password': config.get('ping_url', ''),
+			}
+			if data['triples']:
+				try:
+					urllib2.urlopen(
+						config['ping_url'],
+						urllib.urlencode({'data': json.dumps(data)})
+					)
+				except (urllib2.URLError, urllib2.HTTPError), e:
+					pass
+			
+	print '%s of %s triples processed.' % (triple_count, line_count)
+
+
 class SPARQL(object):
+	_response_regex = re.compile(r'.*>, (\d+) .* triples -- done')
+	
 	def __init__(self, endpoint, graph=None, username=None, password=None):
 		self.endpoint = endpoint
 		self.graph = graph
@@ -252,7 +295,6 @@ class SPARQL(object):
 			'Accept',
 			'application/sparql-results+json,text/javascript,application/json',
 		))
-		
 	
 	def query(self, query):
 		data = urllib.urlencode({
@@ -263,12 +305,21 @@ class SPARQL(object):
 		try:
 			request = self.opener.open(self.endpoint, data)
 			response = json.loads(request.read())
-			print response['results']['bindings'][0]['callret-0']['value']
+			try:
+				msg = response['results']['bindings'][0]['callret-0']['value']
+				match = self._response_regex.match(msg)
+				if match:
+					return int(match.group(1))
+			except KeyError:
+				pass
 		except urllib2.HTTPError, e:
 			# e.g. Virtuoso 22007 Error DT006:
 			# Cannot convert 2007-02-31 to datetime
 			# TODO: log these
+			print query
+			print 'HTTP Error %s: %s' % (e.code, e.read()[:256])
 			pass
+		return 0
 	
 	def insert(self, triple):
 		if triple:
@@ -343,13 +394,11 @@ def run():
 				if added_file:
 					# Unzip and load added file
 					print 'Unzipping and loading %s' % added_file
-					for triple in gzip.open(added_file):
-						sparql.insert(triple)
+					uncompress_and_load(added_file, sparql.insert, 2**14)
 				if removed_file:
 					# Unzip and load removed file
 					print 'Unzipping and loading %s' % removed_file
-					for triple in gzip.open(removed_file):
-						sparql.delete(triple)
+					uncompress_and_load(removed_file, sparql.delete, 2**12)
 				last_update_store.write(last_updated)
 			else:
 				# If this isn't the first run through the loop, wait before
