@@ -264,7 +264,7 @@ def uncompress_and_load(filename, function, query_size=4096):
 				'triples': list(set(filter(ping_pattern.match, queries))),
 				# HACK!
 				'action': 'add' if 'added' in filename else 'remove',
-				'password': config.get('ping_url', ''),
+				'password': config.get('ping_password', ''),
 			}
 			if data['triples']:
 				try:
